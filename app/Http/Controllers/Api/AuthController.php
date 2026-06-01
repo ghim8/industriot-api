@@ -18,11 +18,9 @@ private function getClientIp(Request $request): string
     // POST /api/login
    public function login(Request $request)
 {
-    $request->validate([
-        'email'       => 'required|email',
-        'mot_de_passe'=> 'required|string',
-    ]);
-
+    $ip = $request->input('client_ip')
+            ?? $request->header('X-Forwarded-For')
+            ?? $request->ip();
     $user = Utilisateur::with('entreprise')
                        ->where('email', $request->email)
                        ->first();
@@ -98,16 +96,11 @@ $token = $user->createToken('auth_token')->plainTextToken;
     }
     public function changerMdp(Request $request)
 {
-    $request->validate([
-        'utilisateur_id' => 'required|integer',
-        'nouveau_mdp'    => 'required|string|min:6',
-    ]);
+        $user = Utilisateur::findOrFail($request->utilisateur_id);
+        $user->mot_de_passe = Hash::make($request->nouveau_mdp);
+        $user->mdp_change   = 1;
+        $user->save();
 
-    $user = \App\Models\Utilisateur::findOrFail($request->utilisateur_id);
-    $user->mot_de_passe = \Hash::make($request->nouveau_mdp);
-    $user->mdp_change   = 1;
-    $user->save();
-
-    return response()->json(['message' => 'Mot de passe changé avec succès']);
-}
+        return response()->json(['message' => 'Mot de passe changé avec succès']);
+    }
 }
