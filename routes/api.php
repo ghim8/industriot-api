@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\ActionneurController;
 Route::post('/login',       [AuthController::class, 'login']);
 Route::post('/changer-mdp', [AuthController::class, 'changerMdp']);
 Route::post('/logout',      [AuthController::class, 'logout']);
+Route::get('/ping', fn() => response()->json(['status' => 'ok', 'time' => now()]));
 
 // ── Super Admin (auth uniquement, pas de tenant) ──────────────
 Route::middleware('auth:sanctum')->prefix('super-admin')->group(function () {

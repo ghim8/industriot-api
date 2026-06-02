@@ -67,7 +67,6 @@ class MesureController extends BaseController
             }
         }
 
-        // Fallback — capteurs sans actionneur
         if (empty($grouped)) {
             $capteurs = Capteur::with(['machine'])
                                ->where('machine_id', $machineId)
@@ -107,10 +106,10 @@ class MesureController extends BaseController
             'valeur'     => 'required|numeric',
         ]);
 
-        $capteur    = Capteur::with('machine')->findOrFail($request->capteur_id);
-        $valeur     = (float) $request->valeur;
-        $horseSeuil = false;
-        $niveau     = null;
+        $capteur      = Capteur::with('machine')->findOrFail($request->capteur_id);
+        $valeur       = (float) $request->valeur;
+        $horseSeuil   = false;
+        $niveau       = null;
         $seuilDepasse = null;
 
         // ── Logique Warning 90% / Critique 100% ──
@@ -159,63 +158,74 @@ class MesureController extends BaseController
                 ? "{$typeLabel} hors seuil — {$actionneurNom} ({$machineName})"
                 : "{$typeLabel} hors seuil — {$machineName}";
 
-            // ✅ Chercher UNE alerte existante non acquittée pour ce capteur + machine
-            $alerteExistante = \App\Models\Alerte::where('capteur_id', $request->capteur_id)
-                                                 ->where('machine_id', $request->machine_id)
-                                                 ->where('acquittee', 0)
-                                                 ->latest('cree_le')
-                                                 ->first();
+            // ── Chercher alerte active (non acquittée) ──
+            $alerteActive = \App\Models\Alerte::where('capteur_id', $request->capteur_id)
+                                              ->where('machine_id', $request->machine_id)
+                                              ->where('acquittee', 0)
+                                              ->latest('cree_le')
+                                              ->first();
 
-            // Log debug temporaire
-            \Log::info('Alerte check', [
-                'capteur_id'       => $request->capteur_id,
-                'machine_id'       => $request->machine_id,
-                'valeur'           => $valeur,
-                'niveau'           => $niveau,
-                'seuil85'          => $capteur->seuil_max * 0.85,
-                'seuil100'         => $capteur->seuil_max,
-                'alerte_existante' => $alerteExistante?->id,
-            ]);
+            if ($alerteActive) {
+                // ✅ Alerte active → juste mettre à jour, pas de spam
+                $niveauAvant = $alerteActive->niveau;
 
-            if ($alerteExistante) {
-                // ✅ Mettre à jour — escalade WARNING → CRITIQUE possible
-                $alerteExistante->update([
+                $alerteActive->update([
                     'valeur'  => $valeur,
                     'seuil'   => $seuilDepasse,
                     'niveau'  => $niveau,
                     'message' => $messageAlerte,
                 ]);
 
-                // Email si escalade vers CRITIQUE
-                if ($niveau === 'CRITIQUE' && $alerteExistante->getOriginal('niveau') !== 'CRITIQUE') {
+                // Email uniquement si escalade WARNING → CRITIQUE
+                if ($niveau === 'CRITIQUE' && $niveauAvant !== 'CRITIQUE') {
                     try {
                         $destinataire = env('ALERT_EMAIL', 'admin@usine.local');
-                        Mail::to($destinataire)->send(new AlerteMail($alerteExistante, $capteur->machine));
+                        Mail::to($destinataire)->send(new AlerteMail($alerteActive->fresh(), $capteur->machine));
                     } catch (\Exception $e) {
                         \Log::warning('Email alerte non envoyé : ' . $e->getMessage());
                     }
                 }
 
             } else {
-                // ✅ Créer nouvelle alerte
-                $nouvelleAlerte = \App\Models\Alerte::create([
-                    'machine_id'    => $request->machine_id,
-                    'capteur_id'    => $request->capteur_id,
-                    'niveau'        => $niveau,
-                    'message'       => $messageAlerte,
-                    'valeur'        => $valeur,
-                    'seuil'         => $seuilDepasse,
-                    'acquittee'     => 0,
-                    'entreprise_id' => $request->user()?->entreprise_id,
-                ]);
+                // ── Pas d'alerte active → vérifier le cooldown ──
+                $cooldownMinutes = (int) env('ALERTE_COOLDOWN_MINUTES', 60);
 
-                // Email uniquement pour CRITIQUE
-                if ($niveau === 'CRITIQUE') {
-                    try {
-                        $destinataire = env('ALERT_EMAIL', 'admin@usine.local');
-                        Mail::to($destinataire)->send(new AlerteMail($nouvelleAlerte, $capteur->machine));
-                    } catch (\Exception $e) {
-                        \Log::warning('Email alerte non envoyé : ' . $e->getMessage());
+                $derniereAlerte = \App\Models\Alerte::where('capteur_id', $request->capteur_id)
+                                                    ->where('machine_id', $request->machine_id)
+                                                    ->latest('cree_le')
+                                                    ->first();
+
+                $peutCreer = true;
+
+                if ($derniereAlerte) {
+                    $minutesEcoulees = now()->diffInMinutes($derniereAlerte->cree_le);
+                    if ($minutesEcoulees < $cooldownMinutes) {
+                        // ✅ Moins d'1 heure → pas de nouvelle alerte
+                        $peutCreer = false;
+                    }
+                }
+
+                if ($peutCreer) {
+                    // ✅ Créer nouvelle alerte
+                    $nouvelleAlerte = \App\Models\Alerte::create([
+                        'machine_id'    => $request->machine_id,
+                        'capteur_id'    => $request->capteur_id,
+                        'niveau'        => $niveau,
+                        'message'       => $messageAlerte,
+                        'valeur'        => $valeur,
+                        'seuil'         => $seuilDepasse,
+                        'acquittee'     => 0,
+                        'entreprise_id' => $request->user()?->entreprise_id,
+                    ]);
+
+                    // Email uniquement pour CRITIQUE
+                    if ($niveau === 'CRITIQUE') {
+                        try {
+                            $destinataire = env('ALERT_EMAIL', 'admin@usine.local');
+                            Mail::to($destinataire)->send(new AlerteMail($nouvelleAlerte, $capteur->machine));
+                        } catch (\Exception $e) {
+                            \Log::warning('Email alerte non envoyé : ' . $e->getMessage());
+                        }
                     }
                 }
             }

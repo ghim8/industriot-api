@@ -17,7 +17,6 @@ RUN chmod -R 777 storage bootstrap/cache
 EXPOSE 8000
 
 CMD php artisan config:clear && \
-    php artisan cache:clear && \
-    php artisan route:clear && \
+    php artisan cache:clear --no-interaction || true && \
     php artisan migrate --force && \
     /usr/bin/supervisord -n -c /var/www/supervisord.conf
