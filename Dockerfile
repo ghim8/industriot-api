@@ -14,13 +14,10 @@ COPY . .
 RUN composer install --no-interaction --prefer-dist --optimize-autoloader
 RUN chmod -R 777 storage bootstrap/cache
 
-# Config supervisord
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
 EXPOSE 8000
 
 CMD php artisan config:clear && \
     php artisan cache:clear && \
     php artisan route:clear && \
     php artisan migrate --force && \
-    /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+    /usr/bin/supervisord -n -c /var/www/supervisord.conf
